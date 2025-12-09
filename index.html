@@ -2,18 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Assignment 4</title>
-    <link rel="stylesheet" href="css/styles.css" />
+    <title>Radial Metrics by Region</title>
+    <link rel="stylesheet" href="styles.css" />
+    <!-- D3 v7 -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
   </head>
   <body>
-    <div class="container">
-      <h1>Assignment 4</h1>
-      <div id="vis"></div>
+    <div id="app">
+      <h1>
+        How does the <span id="region-label">Americas</span> compare across
+        metrics?
+      </h1>
+
+      <div id="controls">
+        <label for="region-select">Region:</label>
+        <select id="region-select"></select>
+      </div>
+
+      <div id="chart-container">
+        <svg id="radial-chart"></svg>
+        <div id="tooltip" class="hidden"></div>
+      </div>
     </div>
 
-    <!-- Load D3.js -->
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="js/script.js"></script>
+    <script src="script.js"></script>
   </body>
 </html>
