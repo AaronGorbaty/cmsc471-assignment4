@@ -1,0 +1,19 @@
+.x-axis path,
+.y-axis path,
+.x-axis line,
+.y-axis line {
+    stroke: #333;
+    shape-rendering: crispEdges;
+}
+
+.x-axis text,
+.y-axis text {
+    font-size: 12px;
+    font-family: Arial, sans-serif;
+}
+
+.axis-label {
+    font-size: 14px;
+    font-weight: bold;
+}
+
