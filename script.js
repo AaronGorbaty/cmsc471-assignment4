@@ -145,15 +145,19 @@ function setupControls() {
 function drawVisualization(selectedRegion) {
   if (aggregatedData.length === 0) return;
 
+  // Metrics where a LOWER numeric value is better
+  const lowerIsBetterMetrics = [
+    "Infant Mortality",
+    "Unemployment %",
+    "CO2e Emissions",
+  ];
+  const isLowerBetterMetric = (metricName) =>
+    lowerIsBetterMetrics.includes(metricName);
+
   // --- Step 3.1: Sort Metrics based on performance of selectedRegion (3 pts) ---
 
   const isStronger = (metricName, selectedValue, allRegionalData) => {
-    const lowerIsBetter = [
-      "Infant Mortality",
-      "Unemployment %",
-      "CO2e Emissions",
-    ];
-    const isLowerBetter = lowerIsBetter.includes(metricName);
+    const isLowerBetter = isLowerBetterMetric(metricName);
 
     const otherValues = allRegionalData
       .filter((v) => v.region !== selectedRegion)
@@ -164,8 +168,10 @@ function drawVisualization(selectedRegion) {
     const avgOther = d3.mean(otherValues);
 
     if (isLowerBetter) {
+      // lower value is better → "stronger" if below average
       return selectedValue < avgOther;
     } else {
+      // higher value is better → "stronger" if above average
       return selectedValue > avgOther;
     }
   };
@@ -275,7 +281,7 @@ function drawVisualization(selectedRegion) {
       .lower();
   }
 
-  // --- NEW: Metric Area Wedges (for region hover, under everything) ---
+  // --- Metric Area Wedges (for region hover, under everything) ---
   const areaArc = d3.arc().innerRadius(innerRadius).outerRadius(radius);
 
   const metricAreas = svg
@@ -378,9 +384,15 @@ function drawVisualization(selectedRegion) {
   // --- 3.6: Draw Region Dots (Last element, drawn ON TOP of everything) ---
 
   const allRegionData = orderedMetrics.flatMap((m) => {
+    const lowerBetter = isLowerBetterMetric(m.metric);
+
+    // For “lower is better” metrics, invert domain so
+    // smaller values map to the OUTER radius (better)
+    const domain = lowerBetter ? [m.max, m.min] : [m.min, m.max];
+
     const metricScale = d3
       .scaleLinear()
-      .domain([m.min, m.max])
+      .domain(domain)
       .range([innerRadius, radius]);
 
     return m.regions.map((r) => ({
