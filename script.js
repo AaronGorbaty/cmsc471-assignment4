@@ -395,11 +395,43 @@ function drawVisualization(selectedRegion) {
       .domain(domain)
       .range([innerRadius, radius]);
 
-    return m.regions.map((r) => ({
-      ...r,
-      scale: metricScale,
-      metricKey: m.metric,
-    }));
+    // prevent overlaps by jittering slightly in the
+    // perpendicular (y) direction when x's are too close
+    const placements = [];
+    const xThreshold = 8; // how close is "too close" in pixels along the axis
+    const yStep = 10; // distance between stacked dots
+
+    return m.regions.map((r) => {
+      const baseX = metricScale(r.value);
+      let offsetY = 0;
+      let tries = 0;
+
+      // simple greedy placement: if a previous dot is too close,
+      // bump this one up/down in small steps
+      while (
+        placements.some(
+          (p) =>
+            Math.abs(p.x - baseX) < xThreshold &&
+            Math.abs(p.y - offsetY) < yStep
+        ) &&
+        tries < 20
+      ) {
+        const sign = tries % 2 === 0 ? 1 : -1;
+        const level = Math.ceil((tries + 1) / 2);
+        offsetY = sign * level * yStep;
+        tries++;
+      }
+
+      placements.push({ x: baseX, y: offsetY });
+
+      return {
+        ...r,
+        scale: metricScale,
+        metricKey: m.metric,
+        positionX: baseX,
+        positionY: offsetY,
+      };
+    });
   });
 
   const dots = svg
@@ -429,8 +461,8 @@ function drawVisualization(selectedRegion) {
   circles
     .transition()
     .duration(700)
-    .attr("cx", (d) => d.scale(d.value))
-    .attr("cy", 0);
+    .attr("cx", (d) => d.positionX)
+    .attr("cy", (d) => d.positionY);
 
   // Add Hover Interaction (1 pt) + also highlight region area from dots
   dotsUpdate
