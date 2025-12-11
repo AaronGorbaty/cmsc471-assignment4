@@ -2,29 +2,89 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Radial Metrics by Region</title>
-    <link rel="stylesheet" href="styles.css" />
-    <!-- D3 v7 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Radial Metric Comparison</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+      /* Styles for the overall layout */
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      .controls {
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+      }
+      .controls label {
+        margin-right: 10px;
+        font-size: 1.1em;
+      }
+
+      /* Styles for the SVG elements */
+      .metric-axis line {
+        stroke: #ccc;
+      }
+      .metric-label {
+        font-size: 10px;
+        text-anchor: middle;
+        fill: #555;
+        cursor: pointer;
+      }
+      .region-dot {
+        /* Default non-selected dots */
+        fill: #999;
+        stroke: #fff;
+        stroke-width: 1.5px;
+        cursor: pointer;
+      }
+      .selected-region-dot {
+        /* Selected region dot (purple) */
+        fill: purple;
+      }
+      .highlight-arc {
+        /* The purple arc highlighting better metrics */
+        fill: purple;
+        opacity: 0.15;
+        stroke: purple;
+        stroke-width: 1px;
+      }
+
+      /* Center summary styles */
+      .center-summary {
+        font-size: 4em;
+        font-weight: bold;
+        fill: #333;
+        text-anchor: middle;
+      }
+      .summary-label {
+        font-size: 14px;
+        fill: #777;
+        text-anchor: middle;
+      }
+
+      /* Tooltip style */
+      .tooltip {
+        position: absolute;
+        text-align: center;
+        padding: 5px;
+        font: 12px sans-serif;
+        background: lightsteelblue;
+        border: 0px;
+        border-radius: 8px;
+        pointer-events: none;
+        opacity: 0;
+        z-index: 10;
+      }
+    </style>
   </head>
   <body>
-    <div id="app">
-      <h1>
-        How does the <span id="region-label">Americas</span> compare across
-        metrics?
-      </h1>
-
-      <div id="controls">
-        <label for="region-select">Region:</label>
-        <select id="region-select"></select>
-      </div>
-
-      <div id="chart-container">
-        <svg id="radial-chart"></svg>
-        <div id="tooltip" class="hidden"></div>
-      </div>
+    <div class="controls">
+      <label for="region-select">How do the</label>
+      <select id="region-select"></select>
+      <label>on average compare to the other Regions across 10 metrics?</label>
     </div>
-
+    <div id="visualization"></div>
     <script src="script.js"></script>
   </body>
 </html>

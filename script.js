@@ -1,445 +1,363 @@
-// script.js
-// Radial metrics by region with D3
+// Configuration constants
+const width = 800;
+const height = 800;
+const margin = 50;
+const radius = Math.min(width, height) / 2 - margin;
+const innerRadius = radius * 0.25; // Space for the center summary
 
-const svg = d3.select("#radial-chart");
-const width = 900;
-const height = 600;
-svg.attr("viewBox", `0 0 ${width} ${height}`);
+// Global variables for data and visualization state
+let data;
+let regionNames;
+let selectedRegion = "Americas";
+let aggregatedData;
 
-const chartG = svg
-  .append("g")
-  .attr("transform", `translate(${width / 2}, ${height / 2})`);
+// Setup SVG container
+// NOTE: This is the correct, single declaration for the SVG element.
+const svg = d3.select("#visualization")
+    .append("svg")
+    .attr("width", width)
+    .attr("height", height)
+    .append("g")
+    .attr("transform", `translate(${width / 2}, ${height / 2})`);
 
-const innerRadius = 80;
-const outerRadius = 260;
-const arcInnerRadius = outerRadius + 20;
-const arcOuterRadius = outerRadius + 30;
+// Setup Tooltip (for hover interactions)
+const tooltip = d3.select("body").append("div")
+    .attr("class", "tooltip");
 
-const tooltip = d3.select("#tooltip");
-const regionLabel = d3.select("#region-label");
-const regionSelect = d3.select("#region-select");
+// --- 1. Data Loading and Preparation ---
 
-// hard-coded region order (and legend order)
-const REGION_ORDER = [
-  "Americas",
-  "East Asia & Pacific",
-  "Europe & Central Asia",
-  "Middle East & North Africa",
-  "South Asia",
-  "Sub-Saharan Africa",
-];
-
-let metrics = [];
-let regions = [];
-let dataByRegionMetric = {}; // region -> metric -> avg
-
+// Use the filled data file
 d3.csv("data/assignment3_4_regions_10metrics_template.csv", d3.autoType)
-  .then((raw) => {
-    // Expect columns: country, iso3, region, metric1, metric2, ...
-    const columns = raw.columns;
-    const metaCols = ["country", "iso3", "region"];
+    .then(rawdata => {
+        
+        // Data is ready, no need for client-side mapping anymore.
+        data = rawdata;
+        
+        // Filter out empty region rows and get unique region names
+        regionNames = [...new Set(data.map(d => d.region))].filter(r => r).sort();
+        
+        // Extract metric keys (column headers for the metrics)
+        const metricKeys = rawdata.columns.filter(col => 
+            !['country', 'iso3', 'region', ''].includes(col)
+        );
+        
+        // Metric mapping for cleaner display labels
+        const metricMap = {
+            'happy planet index.1 (2019)': 'Happy Planet Index',
+            'human development index.1 (2021)': 'Human Development Index',
+            'GDP per capita in $ (2021)': 'GDP per Capita',
+            'Economic Growth (2021 or latest)': 'Economic Growth',
+            'Health expenditure % of GDP(2021 or latest)': 'Health % of GDP',
+            'Health Expenditure per person (2019)': 'Health $ Per Capita',
+            'infant mortality (2020)': 'Infant Mortality',
+            'education expenditure\n% of GDP.2 (2021 or latest year)': 'Education % of GDP',
+            'Unemployment % (2021)': 'Unemployment %',
+            'CO2e emissions per capita (2019)': 'CO2e Emissions'
+        };
 
-    metrics = columns.filter((c) => !metaCols.includes(c)).slice(0, 10); // at least 10
-    regions = REGION_ORDER.filter((r) => raw.some((d) => d.region === r));
+        // Aggregation: Calculate average, min, and max for each metric across all regions
+        let allMetrics = metricKeys.map(metricKey => {
+            const cleanMetricName = metricMap[metricKey] || metricKey;
 
-    // fallback if REGION_ORDER doesn't match data
-    if (regions.length === 0) {
-      regions = Array.from(new Set(raw.map((d) => d.region))).filter(Boolean);
-    }
+            const regionAverages = regionNames.map(region => {
+                const regionalCountries = data.filter(d => d.region === region);
+                const avg = d3.mean(regionalCountries, d => d[metricKey]);
+                return {
+                    region: region,
+                    value: avg,
+                    metric: cleanMetricName
+                };
+            }).filter(d => d.value !== undefined && d.value !== null && !isNaN(d.value));
 
-    // populate dropdown
-    regionSelect
-      .selectAll("option")
-      .data(regions)
-      .enter()
-      .append("option")
-      .attr("value", (d) => d)
-      .text((d) => d);
+            const allValues = regionAverages.map(d => d.value);
+            let min = d3.min(allValues);
+            let max = d3.max(allValues);
+            
+            // FIX: Handle Zero Variance (min === max) by expanding the domain slightly
+            if (min !== undefined && max !== undefined && min === max) {
+                 min = min - 0.01;
+                 max = max + 0.01;
+            }
 
-    regionSelect.property("value", regions[0]);
-    regionLabel.text(regions[0]);
+            return {
+                metric: cleanMetricName,
+                key: metricKey,
+                min: min,
+                max: max,
+                regions: regionAverages
+            };
+        });
+        
+        // Final filter: Only keep metrics that have valid min/max bounds
+        aggregatedData = allMetrics.filter(m => m.min !== undefined && m.max !== undefined);
 
-    // precompute regional averages
-    dataByRegionMetric = computeRegionMetricAverages(raw, regions, metrics);
+        if (aggregatedData.length === 0) {
+             svg.append("text").attr("text-anchor", "middle").attr("y", -20).text("No usable metrics found after aggregation. Check data integrity.");
+             return;
+        }
 
-    // draw static scaffolding once
-    initScaffolding();
+        d3.select("#region-select").property('value', selectedRegion);
 
-    // draw first view
-    updateView(regions[0]);
-
-    // interaction: dropdown
-    regionSelect.on("change", (event) => {
-      const selectedRegion = event.target.value;
-      regionLabel.text(selectedRegion);
-      updateView(selectedRegion);
-    });
-  })
-  .catch((err) => console.error(err));
-
-/**
- * Compute average values: region -> metric -> avg
- */
-function computeRegionMetricAverages(data, regions, metrics) {
-  const sums = {};
-  const counts = {};
-
-  regions.forEach((region) => {
-    sums[region] = {};
-    counts[region] = {};
-    metrics.forEach((m) => {
-      sums[region][m] = 0;
-      counts[region][m] = 0;
-    });
-  });
-
-  data.forEach((row) => {
-    const r = row.region;
-    if (!regions.includes(r)) return;
-
-    metrics.forEach((m) => {
-      const v = +row[m];
-      if (!isNaN(v)) {
-        sums[r][m] += v;
-        counts[r][m] += 1;
-      }
-    });
-  });
-
-  const result = {};
-  regions.forEach((region) => {
-    result[region] = {};
-    metrics.forEach((m) => {
-      result[region][m] =
-        counts[region][m] > 0 ? sums[region][m] / counts[region][m] : NaN;
-    });
-  });
-
-  return result;
-}
-
-/**
- * Build metric info for a specific selected region:
- *  - regionValues: { region -> val }
- *  - stronger: selected region > avg(other regions)
- */
-function buildMetricInfo(selectedRegion) {
-  return metrics.map((metric) => {
-    const vals = {};
-    regions.forEach((r) => {
-      vals[r] = dataByRegionMetric[r][metric];
-    });
-
-    const selectedValue = vals[selectedRegion];
-
-    const otherVals = regions
-      .filter((r) => r !== selectedRegion)
-      .map((r) => vals[r])
-      .filter((v) => !isNaN(v));
-
-    let stronger = false;
-    if (!isNaN(selectedValue) && otherVals.length > 0) {
-      const othersAvg = d3.mean(otherVals);
-      stronger = selectedValue > othersAvg;
-    }
-
-    return {
-      metric,
-      regionValues: vals,
-      selectedValue,
-      stronger,
-    };
-  });
-}
-
-/**
- * Initialize SVG groups that remain across updates.
- */
-function initScaffolding() {
-  // group containers
-  chartG.append("g").attr("class", "segments");
-  chartG.append("g").attr("class", "axes");
-  chartG.append("g").attr("class", "dots");
-  chartG.append("g").attr("class", "labels");
-  chartG.append("g").attr("class", "arc-layer");
-
-  // center text
-  chartG
-    .append("text")
-    .attr("class", "center-percent")
-    .attr("id", "center-percent")
-    .attr("y", -8);
-
-  chartG
-    .append("text")
-    .attr("class", "center-caption")
-    .attr("id", "center-caption")
-    .attr("y", 12)
-    .text("of metrics are stronger than the average of other regions");
-}
-
-/**
- * Main update function when region changes.
- */
-function updateView(selectedRegion) {
-  const metricInfo = buildMetricInfo(selectedRegion);
-
-  // sort metrics: stronger first so they are contiguous
-  metricInfo.sort((a, b) => {
-    if (a.stronger === b.stronger) {
-      return d3.ascending(a.metric, b.metric);
-    }
-    return a.stronger ? -1 : 1;
-  });
-
-  const n = metricInfo.length;
-  const angleStep = (2 * Math.PI) / n;
-
-  const angleScale = d3
-    .scaleLinear()
-    .domain([0, n])
-    .range([0, 2 * Math.PI]);
-
-  // radial scale per metric (based on region averages)
-  const radialScales = {};
-  metricInfo.forEach((d, i) => {
-    const metric = d.metric;
-    const vals = regions.map((r) => d.regionValues[r]).filter((v) => !isNaN(v));
-    const minV = d3.min(vals);
-    const maxV = d3.max(vals);
-    radialScales[metric] = d3
-      .scaleLinear()
-      .domain([minV, maxV])
-      .range([innerRadius + 10, outerRadius - 10]);
-  });
-
-  // ----- Background metric segments (for hover) -----
-  const segmentsG = chartG.select(".segments");
-
-  const segment = segmentsG
-    .selectAll(".metric-segment")
-    .data(metricInfo, (d) => d.metric);
-
-  const segmentEnter = segment
-    .enter()
-    .append("path")
-    .attr("class", "metric-segment")
-    .on("mouseover", function (event, d) {
-      d3.select(this).classed("hovered", true);
+        setupControls();
+        drawVisualization(selectedRegion);
     })
-    .on("mouseout", function () {
-      d3.select(this).classed("hovered", false);
+    .catch(error => {
+        console.error("Error loading or processing data. Check file path and server configuration:", error);
+        // Display a helpful error message for file loading issues
+        svg.append("text").attr("text-anchor", "middle").text("Error loading data. Check file path: assignment3_4_regions_filled.csv");
     });
 
-  segmentEnter
-    .merge(segment)
-    .transition()
-    .duration(700)
-    .attrTween("d", (d, i) => {
-      const startAngle = angleScale(i);
-      const endAngle = angleScale(i + 1);
-      const arc = d3
-        .arc()
-        .innerRadius(innerRadius - 20)
-        .outerRadius(outerRadius + 40)
+
+// --- 2. Setup Controls (Dropdown) ---
+
+function setupControls() {
+    d3.select("#region-select")
+        .selectAll("option")
+        .data(regionNames)
+        .enter()
+        .append("option")
+        .attr("value", d => d)
+        .text(d => d);
+
+    d3.select("#region-select").on("change", function(event) {
+        selectedRegion = event.target.value;
+        drawVisualization(selectedRegion);
+    });
+}
+
+
+// --- 3. Core Drawing Function ---
+
+function drawVisualization(selectedRegion) {
+    
+    if (aggregatedData.length === 0) return;
+    
+    // --- Step 3.1: Sort Metrics based on performance of selectedRegion (3 pts) ---
+    
+    const isStronger = (metricName, selectedValue, allRegionalData) => {
+        const lowerIsBetter = ['Infant Mortality', 'Unemployment %', 'CO2e Emissions'];
+        const isLowerBetter = lowerIsBetter.includes(metricName);
+        
+        const otherValues = allRegionalData
+            .filter(v => v.region !== selectedRegion)
+            .map(v => v.value);
+        
+        if (otherValues.length === 0) return false;
+        
+        const avgOther = d3.mean(otherValues);
+        
+        if (isLowerBetter) {
+            return selectedValue < avgOther;
+        } else {
+            return selectedValue > avgOther;
+        }
+    };
+    
+    const scoredMetrics = aggregatedData.map(m => {
+        const selectedRegionData = m.regions.find(r => r.region === selectedRegion);
+        if (!selectedRegionData) {
+            m.isStronger = false;
+            return m;
+        }
+
+        m.isStronger = isStronger(m.metric, selectedRegionData.value, m.regions);
+        return m;
+    });
+
+    const orderedMetrics = scoredMetrics.sort((a, b) => {
+        return (b.isStronger - a.isStronger); 
+    });
+
+    const strongerMetricCount = orderedMetrics.filter(m => m.isStronger).length;
+    const totalMetricCount = orderedMetrics.length;
+    const strongerPercentage = Math.round((strongerMetricCount / totalMetricCount) * 100);
+
+    // --- Step 3.2: Configure Radial Scales and Angles ---
+    
+    const angleScale = d3.scalePoint()
+        .domain(orderedMetrics.map(d => d.metric))
+        .range([0, 2 * Math.PI]);
+    
+    // --- Step 3.3: Draw the Central Summary (1 pt) ---
+    
+    svg.selectAll(".summary-group").remove();
+    
+    const summaryGroup = svg.append("g")
+        .attr("class", "summary-group");
+
+    summaryGroup.append("text")
+        .attr("class", "center-summary")
+        .text(`${strongerPercentage}%`);
+
+    summaryGroup.append("text")
+        .attr("class", "summary-label")
+        .attr("dy", "1.5em")
+        .text("of metrics are stronger than the");
+        
+    summaryGroup.append("text")
+        .attr("class", "summary-label")
+        .attr("dy", "3em") 
+        .text(`average of other Regions`); 
+
+
+    // --- Step 3.4: Draw Metric Axes and Labels (2 pts for layout, 3 pts for updates) ---
+    
+    const metricGroup = svg.selectAll(".metric-group")
+        .data(orderedMetrics, d => d.metric);
+
+    metricGroup.exit().remove();
+    
+    const metricGroupEnter = metricGroup.enter()
+        .append("g")
+        .attr("class", "metric-group");
+
+    const metricGroupUpdate = metricGroupEnter.merge(metricGroup);
+
+    // Axis Line
+    metricGroupUpdate.selectAll("line").remove();
+    metricGroupUpdate.append("line")
+        .attr("class", "metric-axis")
+        .attr("x1", innerRadius)
+        .attr("y1", 0)
+        .attr("x2", radius)
+        .attr("y2", 0);
+
+    // Label 
+    metricGroupUpdate.selectAll("text.metric-label").remove();
+    metricGroupUpdate.append("text")
+        .attr("class", "metric-label")
+        .attr("x", radius + 5)
+        .attr("y", 0)
+        .attr("dy", "0.3em")
+        .text(d => d.metric);
+    
+    // Apply position transition (3 pts)
+    metricGroupUpdate
+        .transition() 
+        .duration(700)
+        .attr("transform", d => {
+            const angle = angleScale(d.metric) - Math.PI / 2;
+            return `rotate(${angle * 180 / Math.PI})`;
+        });
+
+    // Apply static label rotation and interaction
+    metricGroupUpdate.select(".metric-label")
+        .attr("transform", d => {
+            const angle = angleScale(d.metric);
+            let rotateAngle = (angle > Math.PI / 2 && angle < 3 * Math.PI / 2) ? 270 : 90;
+            return `rotate(${rotateAngle})`;
+        })
+        .on("mouseover", function() {
+            d3.select(this.parentNode).append("rect")
+                .attr("class", "metric-hover-bg")
+                .attr("x", innerRadius)
+                .attr("y", -10)
+                .attr("width", radius - innerRadius)
+                .attr("height", 20)
+                .attr("fill", "#eee")
+                .lower();
+        })
+        .on("mouseout", function() {
+            d3.select(this.parentNode).select(".metric-hover-bg").remove();
+        });
+
+
+    // --- Step 3.5: Draw Region Dots (2 pts for 6 dots, 3 pts for updates) ---
+
+    const allRegionData = orderedMetrics.flatMap(m => {
+        const metricScale = d3.scaleLinear()
+            .domain([m.min, m.max])
+            .range([innerRadius, radius]);
+            
+        return m.regions.map(r => ({
+            ...r, 
+            scale: metricScale,
+            metricKey: m.metric
+        }));
+    });
+
+    const dots = svg.selectAll(".region-dot-group")
+        .data(allRegionData, d => d.metricKey + d.region);
+        
+    dots.exit().remove();
+
+    const dotsEnter = dots.enter()
+        .append("g")
+        .attr("class", "region-dot-group");
+
+    dotsEnter.append("circle")
+        .attr("class", "region-dot")
+        .attr("r", 3);
+
+    const dotsUpdate = dotsEnter.merge(dots)
+        .attr("transform", d => {
+            const angle = angleScale(d.metric) - Math.PI / 2;
+            return `rotate(${angle * 180 / Math.PI})`;
+        });
+        
+    const circles = dotsUpdate.select("circle");
+    
+    // Apply size, class, and color instantly
+    circles
+        .attr("r", d => d.region === selectedRegion ? 5 : 3) 
+        .classed("selected-region-dot", d => d.region === selectedRegion) 
+        .style("fill", d => d.region === selectedRegion ? 'purple' : '#999');
+
+    // Animate the positional change (3 pts for updated position)
+    circles.transition()
+        .duration(700)
+        .attr("cx", d => d.scale(d.value))
+        .attr("cy", 0);
+
+
+    // Add Hover Interaction (1 pt)
+    dotsUpdate.on("mouseover", function(event, d) {
+        d3.select(this).select("circle")
+            .attr("stroke", "black")
+            .attr("stroke-width", 2);
+
+        tooltip.style("opacity", 1)
+            .html(`
+                <strong>Metric:</strong> ${d.metric}<br>
+                <strong>Region:</strong> ${d.region}<br>
+                <strong>Value:</strong> ${d3.format(".2f")(d.value)}
+            `)
+            .style("left", (event.pageX + 10) + "px")
+            .style("top", (event.pageY - 28) + "px");
+
+    })
+    .on("mouseout", function() {
+        d3.select(this).select("circle")
+            .attr("stroke", "#fff")
+            .attr("stroke-width", 1.5);
+        
+        tooltip.style("opacity", 0);
+    });
+
+    // --- Step 3.6: Draw the Purple Arc (3 pts for re-drawing) ---
+    
+    const strongerMetrics = orderedMetrics.filter(m => m.isStronger);
+    
+    let startAngle = 0;
+    let endAngle = 0;
+    
+    if (strongerMetrics.length > 0) {
+        const segmentAngle = angleScale.step(); 
+        startAngle = angleScale(strongerMetrics[0].metric) - segmentAngle / 2; 
+        endAngle = angleScale(strongerMetrics[strongerMetrics.length - 1].metric) + segmentAngle / 2;
+    } else {
+        startAngle = 0;
+        endAngle = 0.001; 
+    }
+    
+    const arcGenerator = d3.arc()
+        .innerRadius(innerRadius)
+        .outerRadius(radius + 10)
         .startAngle(startAngle)
         .endAngle(endAngle);
-      return () => arc();
-    });
 
-  segment.exit().remove();
-
-  // ----- Metric axes -----
-  const axesG = chartG.select(".axes");
-
-  const axisLines = axesG
-    .selectAll(".metric-axis")
-    .data(metricInfo, (d) => d.metric);
-
-  const axisEnter = axisLines
-    .enter()
-    .append("line")
-    .attr("class", "metric-axis");
-
-  axisEnter
-    .merge(axisLines)
-    .transition()
-    .duration(700)
-    .attr("x1", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i) - Math.PI / 2;
-      return Math.cos(a) * innerRadius;
-    })
-    .attr("y1", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i) - Math.PI / 2;
-      return Math.sin(a) * innerRadius;
-    })
-    .attr("x2", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i) - Math.PI / 2;
-      return Math.cos(a) * outerRadius;
-    })
-    .attr("y2", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i) - Math.PI / 2;
-      return Math.sin(a) * outerRadius;
-    });
-
-  axisLines.exit().remove();
-
-  // ----- Metric labels -----
-  const labelsG = chartG.select(".labels");
-
-  const labels = labelsG
-    .selectAll(".metric-label")
-    .data(metricInfo, (d) => d.metric);
-
-  const labelsEnter = labels
-    .enter()
-    .append("text")
-    .attr("class", "metric-label")
-    .text((d) => d.metric);
-
-  labelsEnter
-    .merge(labels)
-    .transition()
-    .duration(700)
-    .attr("x", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i + 0.5) - Math.PI / 2;
-      return Math.cos(a) * (outerRadius + 55);
-    })
-    .attr("y", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i + 0.5) - Math.PI / 2;
-      return Math.sin(a) * (outerRadius + 55);
-    })
-    .attr("text-anchor", (d) => {
-      const i = metricInfo.indexOf(d);
-      const angleDeg = (angleScale(i + 0.5) * 180) / Math.PI;
-      return angleDeg > 90 && angleDeg < 270 ? "end" : "start";
-    })
-    .attr("transform", (d) => {
-      const i = metricInfo.indexOf(d);
-      const a = angleScale(i + 0.5) - Math.PI / 2;
-      const angleDeg = (a * 180) / Math.PI;
-      const x = Math.cos(a) * (outerRadius + 55);
-      const y = Math.sin(a) * (outerRadius + 55);
-      // rotate text so it is more readable
-      return `translate(${x},${y}) rotate(${angleDeg})`;
-    })
-    .text((d) => d.metric);
-
-  labels.exit().remove();
-
-  // ----- Region dots along each axis -----
-  const dotsG = chartG.select(".dots");
-
-  // flatten: one object per (metric, region)
-  const dotData = [];
-  metricInfo.forEach((mInfo, metricIndex) => {
-    regions.forEach((region, rIndex) => {
-      dotData.push({
-        metric: mInfo.metric,
-        metricIndex,
-        region,
-        value: mInfo.regionValues[region],
-      });
-    });
-  });
-
-  const dots = dotsG
-    .selectAll(".region-dot")
-    .data(dotData, (d) => `${d.metric}-${d.region}`);
-
-  const dotsEnter = dots
-    .enter()
-    .append("circle")
-    .attr("class", "region-dot")
-    .attr("r", 3)
-    .on("mouseover", (event, d) => {
-      // tooltip
-      tooltip
-        .classed("hidden", false)
-        .classed("visible", true)
-        .html(
-          `<strong>Metric:</strong> ${d.metric}<br/>
-           <strong>Region:</strong> ${d.region}<br/>
-           <strong>Value:</strong> ${
-             d.value != null ? d.value.toFixed(2) : "N/A"
-           }`
-        )
-        .style("left", event.pageX + 12 + "px")
-        .style("top", event.pageY - 12 + "px");
-    })
-    .on("mousemove", (event) => {
-      tooltip
-        .style("left", event.pageX + 12 + "px")
-        .style("top", event.pageY - 12 + "px");
-    })
-    .on("mouseout", () => {
-      tooltip.classed("visible", false).classed("hidden", true);
-    });
-
-  dotsEnter
-    .merge(dots)
-    .transition()
-    .duration(700)
-    .attr("r", (d) => (d.region === selectedRegion ? 6 : 3.5))
-    .attr(
-      "class",
-      (d) =>
-        "region-dot" + (d.region === selectedRegion ? " selected-region" : "")
-    )
-    .attr("cx", (d) => {
-      const angle = angleScale(d.metricIndex) - Math.PI / 2;
-      const rs = radialScales[d.metric];
-      const baseR = rs(d.value);
-      // small angular jitter to reduce overlap
-      const offset = (REGION_ORDER.indexOf(d.region) - 2.5) * 2; // degrees
-      const jitterAngle = angle + (offset * Math.PI) / 180;
-      return Math.cos(jitterAngle) * baseR;
-    })
-    .attr("cy", (d) => {
-      const angle = angleScale(d.metricIndex) - Math.PI / 2;
-      const rs = radialScales[d.metric];
-      const baseR = rs(d.value);
-      const offset = (REGION_ORDER.indexOf(d.region) - 2.5) * 2;
-      const jitterAngle = angle + (offset * Math.PI) / 180;
-      return Math.sin(jitterAngle) * baseR;
-    });
-
-  dots.exit().remove();
-
-  // ----- Purple arc -----
-  const strongCount = metricInfo.filter((d) => d.stronger).length;
-  const arcAngleEnd = angleScale(strongCount);
-
-  const arcLayer = chartG.select(".arc-layer");
-  let purpleArc = arcLayer.selectAll(".purple-arc").data([strongCount]);
-
-  const arcGenerator = d3
-    .arc()
-    .innerRadius(arcInnerRadius)
-    .outerRadius(arcOuterRadius)
-    .startAngle(0);
-
-  purpleArc
-    .enter()
-    .append("path")
-    .attr("class", "purple-arc")
-    .merge(purpleArc)
-    .transition()
-    .duration(700)
-    .attrTween("d", () => {
-      const i = d3.interpolate(0, arcAngleEnd);
-      return (t) => arcGenerator.endAngle(i(t))();
-    });
-
-  purpleArc.exit().remove();
-
-  // ----- Center summary text -----
-  const percent = (strongCount / metricInfo.length) * 100;
-  d3.select("#center-percent").text(`${Math.round(percent)}%`);
+    svg.selectAll(".highlight-arc").remove();
+    svg.append("path")
+        .attr("class", "highlight-arc")
+        .attr("d", arcGenerator());
 }
