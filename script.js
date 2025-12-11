@@ -1,9 +1,9 @@
 // Configuration constants
 const width = 800;
 const height = 800;
-const margin = 50;
+const margin = 120;
 const radius = Math.min(width, height) / 2 - margin;
-const innerRadius = radius * 0.25; // Space for the center summary
+const innerRadius = radius * 0.4; // Space for the center summary
 
 // Global variables for data and visualization state
 let data;
@@ -12,7 +12,6 @@ let selectedRegion = "Americas";
 let aggregatedData;
 
 // Setup SVG container
-// NOTE: This is the correct, single declaration for the SVG element.
 const svg = d3.select("#visualization")
     .append("svg")
     .attr("width", width)
@@ -26,22 +25,18 @@ const tooltip = d3.select("body").append("div")
 
 // --- 1. Data Loading and Preparation ---
 
-// Use the filled data file
-d3.csv("data/assignment3_4_regions_10metrics_template.csv", d3.autoType)
+// Ensure file path is correct for D3 loading
+d3.csv("data/assignment3_4_regions_filled.csv", d3.autoType)
     .then(rawdata => {
         
-        // Data is ready, no need for client-side mapping anymore.
         data = rawdata;
         
-        // Filter out empty region rows and get unique region names
         regionNames = [...new Set(data.map(d => d.region))].filter(r => r).sort();
         
-        // Extract metric keys (column headers for the metrics)
         const metricKeys = rawdata.columns.filter(col => 
             !['country', 'iso3', 'region', ''].includes(col)
         );
         
-        // Metric mapping for cleaner display labels
         const metricMap = {
             'happy planet index.1 (2019)': 'Happy Planet Index',
             'human development index.1 (2021)': 'Human Development Index',
@@ -73,7 +68,7 @@ d3.csv("data/assignment3_4_regions_10metrics_template.csv", d3.autoType)
             let min = d3.min(allValues);
             let max = d3.max(allValues);
             
-            // FIX: Handle Zero Variance (min === max) by expanding the domain slightly
+            // FIX: Handle Zero Variance by expanding the domain slightly
             if (min !== undefined && max !== undefined && min === max) {
                  min = min - 0.01;
                  max = max + 0.01;
@@ -103,8 +98,7 @@ d3.csv("data/assignment3_4_regions_10metrics_template.csv", d3.autoType)
     })
     .catch(error => {
         console.error("Error loading or processing data. Check file path and server configuration:", error);
-        // Display a helpful error message for file loading issues
-        svg.append("text").attr("text-anchor", "middle").text("Error loading data. Check file path: assignment3_4_regions_filled.csv");
+        svg.append("text").attr("text-anchor", "middle").text("Error loading data. Check file path: data/assignment3_4_regions_filled.csv");
     });
 
 
@@ -176,7 +170,8 @@ function drawVisualization(selectedRegion) {
     
     const angleScale = d3.scalePoint()
         .domain(orderedMetrics.map(d => d.metric))
-        .range([0, 2 * Math.PI]);
+        .range([0, 2 * Math.PI])
+        .padding(0.5); 
     
     // --- Step 3.3: Draw the Central Summary (1 pt) ---
     
@@ -199,8 +194,41 @@ function drawVisualization(selectedRegion) {
         .attr("dy", "3em") 
         .text(`average of other Regions`); 
 
+    
+    // --- 3.4: Draw the Purple Arc (FIX: Ensure it is drawn first) ---
+    
+    const strongerMetrics = orderedMetrics.filter(m => m.isStronger);
+    
+    let startAngle = 0;
+    let endAngle = 0;
+    
+    if (strongerMetrics.length > 0) {
+        const segmentAngle = angleScale.step(); 
+        const centerAngleStart = angleScale(strongerMetrics[0].metric);
+        const centerAngleEnd = angleScale(strongerMetrics[strongerMetrics.length - 1].metric);
 
-    // --- Step 3.4: Draw Metric Axes and Labels (2 pts for layout, 3 pts for updates) ---
+        startAngle = centerAngleStart - segmentAngle / 2; 
+        endAngle = centerAngleEnd + segmentAngle / 2;
+    } else {
+        startAngle = 0;
+        endAngle = 0.001; 
+    }
+    
+    const arcGenerator = d3.arc()
+        .innerRadius(innerRadius)
+        .outerRadius(radius + 10)
+        .startAngle(startAngle)
+        .endAngle(endAngle);
+
+    // Draw the arc and use .lower() to send it behind everything else.
+    svg.selectAll(".highlight-arc").remove();
+    svg.append("path")
+        .attr("class", "highlight-arc")
+        .attr("d", arcGenerator())
+        .lower(); // <-- CRITICAL FIX: Send the arc to the bottom layer
+
+
+    // --- 3.5: Draw Metric Axes and Labels (Will be drawn ON TOP of the Arc) ---
     
     const metricGroup = svg.selectAll(".metric-group")
         .data(orderedMetrics, d => d.metric);
@@ -212,7 +240,9 @@ function drawVisualization(selectedRegion) {
         .attr("class", "metric-group");
 
     const metricGroupUpdate = metricGroupEnter.merge(metricGroup);
-
+    
+    const labelOffset = radius + 45; 
+    
     // Axis Line
     metricGroupUpdate.selectAll("line").remove();
     metricGroupUpdate.append("line")
@@ -226,7 +256,6 @@ function drawVisualization(selectedRegion) {
     metricGroupUpdate.selectAll("text.metric-label").remove();
     metricGroupUpdate.append("text")
         .attr("class", "metric-label")
-        .attr("x", radius + 5)
         .attr("y", 0)
         .attr("dy", "0.3em")
         .text(d => d.metric);
@@ -240,12 +269,25 @@ function drawVisualization(selectedRegion) {
             return `rotate(${angle * 180 / Math.PI})`;
         });
 
-    // Apply static label rotation and interaction
+    // Dynamic X position, Anchor, and Rotation for correct outward display
     metricGroupUpdate.select(".metric-label")
+        .attr("x", d => {
+            const angle = angleScale(d.metric) * 180 / Math.PI;
+            return (angle > 90 && angle < 270) ? -labelOffset : labelOffset;
+        })
+        .attr("text-anchor", d => {
+            const angle = angleScale(d.metric) * 180 / Math.PI;
+            return (angle > 90 && angle < 270) ? "end" : "start";
+        })
         .attr("transform", d => {
-            const angle = angleScale(d.metric);
-            let rotateAngle = (angle > Math.PI / 2 && angle < 3 * Math.PI / 2) ? 270 : 90;
-            return `rotate(${rotateAngle})`;
+            const angle = angleScale(d.metric) * 180 / Math.PI;
+            let rotation = 0;
+            
+            if (angle > 90 && angle < 270) {
+                rotation = 180;
+            } 
+            
+            return `rotate(${rotation})`;
         })
         .on("mouseover", function() {
             d3.select(this.parentNode).append("rect")
@@ -262,7 +304,7 @@ function drawVisualization(selectedRegion) {
         });
 
 
-    // --- Step 3.5: Draw Region Dots (2 pts for 6 dots, 3 pts for updates) ---
+    // --- 3.6: Draw Region Dots (Last element, drawn ON TOP of everything) ---
 
     const allRegionData = orderedMetrics.flatMap(m => {
         const metricScale = d3.scaleLinear()
@@ -333,31 +375,4 @@ function drawVisualization(selectedRegion) {
         
         tooltip.style("opacity", 0);
     });
-
-    // --- Step 3.6: Draw the Purple Arc (3 pts for re-drawing) ---
-    
-    const strongerMetrics = orderedMetrics.filter(m => m.isStronger);
-    
-    let startAngle = 0;
-    let endAngle = 0;
-    
-    if (strongerMetrics.length > 0) {
-        const segmentAngle = angleScale.step(); 
-        startAngle = angleScale(strongerMetrics[0].metric) - segmentAngle / 2; 
-        endAngle = angleScale(strongerMetrics[strongerMetrics.length - 1].metric) + segmentAngle / 2;
-    } else {
-        startAngle = 0;
-        endAngle = 0.001; 
-    }
-    
-    const arcGenerator = d3.arc()
-        .innerRadius(innerRadius)
-        .outerRadius(radius + 10)
-        .startAngle(startAngle)
-        .endAngle(endAngle);
-
-    svg.selectAll(".highlight-arc").remove();
-    svg.append("path")
-        .attr("class", "highlight-arc")
-        .attr("d", arcGenerator());
 }
